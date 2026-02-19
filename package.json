@@ -1,0 +1,26 @@
+{
+  "name": "dc-a",
+  "version": "1.0.0",
+  "description": "Discord server cloning tool that clones everything from a server including roles, channels, categories, messages, embeds, and attachments using webhooks",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Tanmayop9/dc-a.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Tanmayop9/dc-a/issues"
+  },
+  "homepage": "https://github.com/Tanmayop9/dc-a#readme",
+  "dependencies": {
+    "discord.js-selfbot-v13": "^3.7.1",
+    "dotenv": "^17.3.1"
+  }
+}
