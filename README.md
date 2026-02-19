@@ -16,7 +16,7 @@ A powerful tool that clones everything from a Discord server including roles, ch
 
 ## Prerequisites
 
-- Node.js v16.9.0 or higher
+- Node.js v20.18.0 or higher
 - A Discord user account (not a bot account)
 - Access to both source and target servers
 - Proper permissions in the target server (Administrator recommended)
