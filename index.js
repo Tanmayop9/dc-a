@@ -1,34 +1,99 @@
 require('dotenv').config();
 const { Client } = require('discord.js-selfbot-v13');
+const readline = require('readline');
 
-const client = new Client();
+// ─── ANSI colour helpers ────────────────────────────────────────────────────
+const c = {
+    reset: '\x1b[0m',
+    bold:  '\x1b[1m',
+    dim:   '\x1b[2m',
+    cyan:  '\x1b[36m',
+    green: '\x1b[32m',
+    yellow:'\x1b[33m',
+    red:   '\x1b[31m',
+    blue:  '\x1b[34m',
+    magenta: '\x1b[35m',
+    white: '\x1b[37m',
+};
+const paint = (color, text) => `${color}${text}${c.reset}`;
 
-// Configuration
-const USER_TOKEN = process.env.USER_TOKEN;
-const SOURCE_SERVER_ID = process.env.SOURCE_SERVER_ID;
-const TARGET_SERVER_ID = process.env.TARGET_SERVER_ID;
+// ─── Logger ─────────────────────────────────────────────────────────────────
+const stats = { roles: 0, categories: 0, textChannels: 0, voiceChannels: 0, messages: 0, errors: 0 };
 
-// Storage for cloned data
-const clonedChannels = new Map();
-const clonedRoles = new Map();
-
-// Utility function to delay execution
-const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
-// Utility function to log with timestamp
-const log = (message) => {
-    console.log(`[${new Date().toISOString()}] ${message}`);
+const log = {
+    info:    (msg) => console.log(`${paint(c.cyan,   '[INFO]')}  ${msg}`),
+    success: (msg) => console.log(`${paint(c.green,  '[OK]')}    ${msg}`),
+    warn:    (msg) => console.log(`${paint(c.yellow, '[WARN]')}  ${msg}`),
+    error:   (msg) => { stats.errors++; console.log(`${paint(c.red, '[ERR]')}   ${msg}`); },
+    step:    (msg) => console.log(`\n${paint(c.bold + c.blue, '━━ ' + msg + ' ━━')}`),
+    dim:     (msg) => console.log(`${paint(c.dim, msg)}`),
 };
 
-// Clone roles from source to target server
-async function cloneRoles(sourceGuild, targetGuild) {
-    log('Starting role cloning...');
-    
-    const sourceRoles = sourceGuild.roles.cache
-        .sort((a, b) => a.position - b.position)
-        .filter(role => role.name !== '@everyone');
-    
-    for (const [roleId, role] of sourceRoles) {
+// ─── Utility ─────────────────────────────────────────────────────────────────
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+/** Run tasks with limited concurrency */
+async function pLimit(tasks, concurrency) {
+    const results = [];
+    let i = 0;
+    async function worker() {
+        while (i < tasks.length) {
+            const idx = i++;
+            results[idx] = await tasks[idx]();
+        }
+    }
+    await Promise.all(Array.from({ length: Math.min(concurrency, tasks.length) }, worker));
+    return results;
+}
+
+// ─── Progress bar ─────────────────────────────────────────────────────────────
+function progressBar(done, total, width = 30) {
+    const pct = total === 0 ? 1 : done / total;
+    const filled = Math.round(pct * width);
+    const bar = paint(c.green, '█'.repeat(filled)) + paint(c.dim, '░'.repeat(width - filled));
+    return `[${bar}] ${done}/${total}`;
+}
+
+// ─── Readline helpers ─────────────────────────────────────────────────────────
+function createRl() {
+    return readline.createInterface({ input: process.stdin, output: process.stdout });
+}
+
+function ask(rl, question, defaultValue = '') {
+    const hint = defaultValue ? paint(c.dim, ` [${defaultValue}]`) : '';
+    return new Promise(resolve => {
+        rl.question(`${paint(c.cyan, '?')} ${question}${hint}: `, (answer) => {
+            resolve(answer.trim() || defaultValue);
+        });
+    });
+}
+
+function askYN(rl, question, defaultYes = true) {
+    const hint = defaultYes ? 'Y/n' : 'y/N';
+    return new Promise(resolve => {
+        rl.question(`${paint(c.cyan, '?')} ${question} ${paint(c.dim, `(${hint})`)} `, (answer) => {
+            const a = answer.trim().toLowerCase();
+            resolve(a === '' ? defaultYes : a === 'y' || a === 'yes');
+        });
+    });
+}
+
+// ─── Storage ──────────────────────────────────────────────────────────────────
+const clonedChannels = new Map();
+const clonedRoles    = new Map();
+
+// ─── Core clone functions ─────────────────────────────────────────────────────
+
+async function cloneRoles(sourceGuild, targetGuild, rateMs) {
+    log.step('Cloning Roles');
+    const sourceRoles = [...sourceGuild.roles.cache.values()]
+        .filter(r => r.name !== '@everyone')
+        .sort((a, b) => a.position - b.position);
+
+    let done = 0;
+    process.stdout.write(`  ${progressBar(done, sourceRoles.length)}\r`);
+
+    for (const role of sourceRoles) {
         try {
             const newRole = await targetGuild.roles.create({
                 name: role.name,
@@ -37,246 +102,257 @@ async function cloneRoles(sourceGuild, targetGuild) {
                 permissions: role.permissions,
                 mentionable: role.mentionable,
             });
-            
-            clonedRoles.set(roleId, newRole.id);
-            log(`Cloned role: ${role.name}`);
-            await delay(1000); // Rate limit protection
-        } catch (error) {
-            log(`Error cloning role ${role.name}: ${error.message}`);
+            clonedRoles.set(role.id, newRole.id);
+            stats.roles++;
+            log.success(`Role: ${paint(c.magenta, role.name)}`);
+            await delay(rateMs);
+        } catch (err) {
+            log.error(`Role "${role.name}": ${err.message}`);
         }
+        done++;
+        process.stdout.write(`  ${progressBar(done, sourceRoles.length)}\r`);
     }
-    
-    log('Role cloning completed!');
+    console.log();
+    log.info(`Roles done — ${stats.roles} cloned, ${stats.errors} errors`);
 }
 
-// Clone channels and categories
-async function cloneChannels(sourceGuild, targetGuild) {
-    log('Starting channel cloning...');
-    
-    // First, clone categories
-    const categories = sourceGuild.channels.cache
-        .filter(ch => ch.type === 'GUILD_CATEGORY')
+async function cloneChannels(sourceGuild, targetGuild, skipIds, rateMs) {
+    log.step('Cloning Categories & Channels');
+
+    // Categories first
+    const categories = [...sourceGuild.channels.cache.values()]
+        .filter(ch => ch.type === 'GUILD_CATEGORY' && !skipIds.has(ch.id))
         .sort((a, b) => a.position - b.position);
-    
-    for (const [categoryId, category] of categories) {
+
+    for (const cat of categories) {
         try {
-            const newCategory = await targetGuild.channels.create(category.name, {
+            const newCat = await targetGuild.channels.create(cat.name, {
                 type: 'GUILD_CATEGORY',
-                position: category.position,
+                position: cat.position,
             });
-            
-            clonedChannels.set(categoryId, newCategory.id);
-            log(`Cloned category: ${category.name}`);
-            await delay(1000);
-        } catch (error) {
-            log(`Error cloning category ${category.name}: ${error.message}`);
+            clonedChannels.set(cat.id, newCat.id);
+            stats.categories++;
+            log.success(`Category: ${paint(c.yellow, cat.name)}`);
+            await delay(rateMs);
+        } catch (err) {
+            log.error(`Category "${cat.name}": ${err.message}`);
         }
     }
-    
-    // Then, clone text channels
-    const textChannels = sourceGuild.channels.cache
-        .filter(ch => ch.type === 'GUILD_TEXT')
+
+    // Text channels
+    const textChannels = [...sourceGuild.channels.cache.values()]
+        .filter(ch => ch.type === 'GUILD_TEXT' && !skipIds.has(ch.id))
         .sort((a, b) => a.position - b.position);
-    
-    for (const [channelId, channel] of textChannels) {
+
+    for (const ch of textChannels) {
         try {
-            const options = {
+            const opts = {
                 type: 'GUILD_TEXT',
-                topic: channel.topic,
-                nsfw: channel.nsfw,
-                position: channel.position,
-                rateLimitPerUser: channel.rateLimitPerUser,
+                topic: ch.topic,
+                nsfw: ch.nsfw,
+                position: ch.position,
+                rateLimitPerUser: ch.rateLimitPerUser,
             };
-            
-            if (channel.parent) {
-                const newParentId = clonedChannels.get(channel.parent.id);
-                if (newParentId) {
-                    options.parent = newParentId;
-                }
+            if (ch.parent) {
+                const parentId = clonedChannels.get(ch.parent.id);
+                if (parentId) opts.parent = parentId;
             }
-            
-            const newChannel = await targetGuild.channels.create(channel.name, options);
-            clonedChannels.set(channelId, newChannel.id);
-            log(`Cloned text channel: ${channel.name}`);
-            await delay(1000);
-        } catch (error) {
-            log(`Error cloning text channel ${channel.name}: ${error.message}`);
+            const newCh = await targetGuild.channels.create(ch.name, opts);
+            clonedChannels.set(ch.id, newCh.id);
+            stats.textChannels++;
+            log.success(`Text: #${paint(c.cyan, ch.name)}`);
+            await delay(rateMs);
+        } catch (err) {
+            log.error(`Text channel "${ch.name}": ${err.message}`);
         }
     }
-    
-    // Clone voice channels
-    const voiceChannels = sourceGuild.channels.cache
-        .filter(ch => ch.type === 'GUILD_VOICE')
+
+    // Voice channels
+    const voiceChannels = [...sourceGuild.channels.cache.values()]
+        .filter(ch => ch.type === 'GUILD_VOICE' && !skipIds.has(ch.id))
         .sort((a, b) => a.position - b.position);
-    
-    for (const [channelId, channel] of voiceChannels) {
+
+    for (const ch of voiceChannels) {
         try {
-            const options = {
+            const opts = {
                 type: 'GUILD_VOICE',
-                bitrate: channel.bitrate,
-                userLimit: channel.userLimit,
-                position: channel.position,
+                bitrate: ch.bitrate,
+                userLimit: ch.userLimit,
+                position: ch.position,
             };
-            
-            if (channel.parent) {
-                const newParentId = clonedChannels.get(channel.parent.id);
-                if (newParentId) {
-                    options.parent = newParentId;
-                }
+            if (ch.parent) {
+                const parentId = clonedChannels.get(ch.parent.id);
+                if (parentId) opts.parent = parentId;
             }
-            
-            const newChannel = await targetGuild.channels.create(channel.name, options);
-            clonedChannels.set(channelId, newChannel.id);
-            log(`Cloned voice channel: ${channel.name}`);
-            await delay(1000);
-        } catch (error) {
-            log(`Error cloning voice channel ${channel.name}: ${error.message}`);
+            const newCh = await targetGuild.channels.create(ch.name, opts);
+            clonedChannels.set(ch.id, newCh.id);
+            stats.voiceChannels++;
+            log.success(`Voice: 🔊 ${paint(c.cyan, ch.name)}`);
+            await delay(rateMs);
+        } catch (err) {
+            log.error(`Voice channel "${ch.name}": ${err.message}`);
         }
     }
-    
-    log('Channel cloning completed!');
+
+    log.info(`Channels done — ${stats.categories} categories, ${stats.textChannels} text, ${stats.voiceChannels} voice`);
 }
 
-// Clone messages from a channel using webhooks
-async function cloneMessages(sourceChannel, targetChannel, limit = 100) {
+async function cloneMessages(sourceChannel, targetChannel, limit, rateMs) {
     try {
-        log(`Starting message cloning for channel: ${sourceChannel.name}`);
-        
-        // Create webhook in target channel
-        const webhook = await targetChannel.createWebhook('Clone Bot', {
-            reason: 'Message cloning',
-        });
-        
-        // Fetch messages
+        const webhook = await targetChannel.createWebhook('CloneBot', { reason: 'Message cloning' });
         let messages = await sourceChannel.messages.fetch({ limit });
-        messages = messages.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
-        
-        for (const [messageId, message] of messages) {
+        messages = [...messages.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+
+        let done = 0;
+        for (const msg of messages) {
             try {
-                const webhookOptions = {
-                    username: message.author.username,
-                    avatarURL: message.author.displayAvatarURL(),
+                const opts = {
+                    username:  msg.author.username,
+                    avatarURL: msg.author.displayAvatarURL(),
                 };
-                
-                // Handle regular content
-                if (message.content) {
-                    webhookOptions.content = message.content;
+                if (msg.content)            opts.content = msg.content;
+                if (msg.embeds.length > 0)  opts.embeds  = msg.embeds.map(e => e.toJSON());
+                if (msg.attachments.size > 0) {
+                    opts.files = [...msg.attachments.values()].map(a => ({ attachment: a.url, name: a.name }));
                 }
-                
-                // Handle embeds
-                if (message.embeds.length > 0) {
-                    webhookOptions.embeds = message.embeds.map(embed => embed.toJSON());
+                if (opts.content || opts.embeds || opts.files) {
+                    await webhook.send(opts);
+                    stats.messages++;
+                    await delay(rateMs);
                 }
-                
-                // Handle attachments
-                if (message.attachments.size > 0) {
-                    webhookOptions.files = message.attachments.map(attachment => ({
-                        attachment: attachment.url,
-                        name: attachment.name,
-                    }));
-                }
-                
-                // Send message via webhook
-                if (webhookOptions.content || webhookOptions.embeds || webhookOptions.files) {
-                    await webhook.send(webhookOptions);
-                    await delay(1000); // Rate limit protection
-                }
-            } catch (error) {
-                log(`Error cloning message ${messageId}: ${error.message}`);
+            } catch (err) {
+                log.error(`Message in #${sourceChannel.name}: ${err.message}`);
             }
+            done++;
+            process.stdout.write(`  #${sourceChannel.name} ${progressBar(done, messages.length)}\r`);
         }
-        
-        // Clean up webhook
+        console.log();
         await webhook.delete();
-        log(`Message cloning completed for channel: ${sourceChannel.name}`);
-    } catch (error) {
-        log(`Error in cloneMessages: ${error.message}`);
+    } catch (err) {
+        log.error(`cloneMessages #${sourceChannel.name}: ${err.message}`);
     }
 }
 
-// Clone all messages from all text channels
-async function cloneAllMessages(sourceGuild, targetGuild) {
-    log('Starting message cloning for all channels...');
-    
-    const sourceTextChannels = sourceGuild.channels.cache.filter(ch => ch.type === 'GUILD_TEXT');
-    
-    for (const [channelId, sourceChannel] of sourceTextChannels) {
-        const targetChannelId = clonedChannels.get(channelId);
-        if (targetChannelId) {
-            const targetChannel = targetGuild.channels.cache.get(targetChannelId);
-            if (targetChannel) {
-                await cloneMessages(sourceChannel, targetChannel);
-            }
+async function cloneAllMessages(sourceGuild, targetGuild, skipIds, limit, concurrency, rateMs) {
+    log.step('Cloning Messages');
+    const pairs = [];
+    for (const [srcId, tgtId] of clonedChannels) {
+        const src = sourceGuild.channels.cache.get(srcId);
+        const tgt = targetGuild.channels.cache.get(tgtId);
+        if (src && tgt && src.type === 'GUILD_TEXT' && !skipIds.has(srcId)) {
+            pairs.push({ src, tgt });
         }
     }
-    
-    log('All message cloning completed!');
+    log.info(`Cloning messages from ${pairs.length} channels (concurrency: ${concurrency}, limit: ${limit})`);
+    const tasks = pairs.map(({ src, tgt }) => () => cloneMessages(src, tgt, limit, rateMs));
+    await pLimit(tasks, concurrency);
+    log.info(`Messages done — ${stats.messages} sent`);
 }
 
-// Main cloning function
-async function cloneServer() {
-    try {
-        log('Starting server cloning process...');
-        
-        // Validate configuration
-        if (!USER_TOKEN || !SOURCE_SERVER_ID || !TARGET_SERVER_ID) {
-            throw new Error('Missing required configuration. Please check your .env file.');
-        }
-        
-        // Get guilds
-        const sourceGuild = client.guilds.cache.get(SOURCE_SERVER_ID);
-        const targetGuild = client.guilds.cache.get(TARGET_SERVER_ID);
-        
-        if (!sourceGuild) {
-            throw new Error(`Source server not found. ID: ${SOURCE_SERVER_ID}`);
-        }
-        
-        if (!targetGuild) {
-            throw new Error(`Target server not found. ID: ${TARGET_SERVER_ID}`);
-        }
-        
-        log(`Source server: ${sourceGuild.name}`);
-        log(`Target server: ${targetGuild.name}`);
-        
-        // Step 1: Clone roles
-        await cloneRoles(sourceGuild, targetGuild);
-        
-        // Step 2: Clone channels and categories
-        await cloneChannels(sourceGuild, targetGuild);
-        
-        // Step 3: Clone messages
-        await cloneAllMessages(sourceGuild, targetGuild);
-        
-        log('Server cloning completed successfully!');
-        
-    } catch (error) {
-        log(`Error in cloneServer: ${error.message}`);
-        console.error(error);
+// ─── Interactive configuration ────────────────────────────────────────────────
+async function promptConfig() {
+    const rl = createRl();
+
+    console.clear();
+    console.log(paint(c.bold + c.magenta,
+        '╔══════════════════════════════════════════════╗\n' +
+        '║    Discord Server Cloner  ⚡  Ultra Edition  ║\n' +
+        '╚══════════════════════════════════════════════╝'
+    ));
+    console.log(paint(c.dim, '  Press Enter to accept [defaults from .env]\n'));
+
+    const token      = await ask(rl, 'User token',         process.env.USER_TOKEN        || '');
+    const sourceId   = await ask(rl, 'Source server ID',   process.env.SOURCE_SERVER_ID  || '');
+    const targetId   = await ask(rl, 'Target server ID',   process.env.TARGET_SERVER_ID  || '');
+
+    // Skip channel IDs
+    const skipRaw    = await ask(rl, 'Skip channel IDs (comma-separated, or leave blank)',
+                                     process.env.SKIP_CHANNEL_IDS || '');
+    const skipIds    = new Set(skipRaw.split(',').map(s => s.trim()).filter(Boolean));
+
+    // What to clone
+    console.log(paint(c.bold, '\n  What to clone?'));
+    const doRoles    = await askYN(rl, '  Clone roles?',         true);
+    const doChannels = await askYN(rl, '  Clone channels?',      true);
+    const doMessages = await askYN(rl, '  Clone messages?',      true);
+
+    // Performance options
+    console.log(paint(c.bold, '\n  Performance options'));
+    const msgLimit   = parseInt(await ask(rl, '  Messages per channel', process.env.MSG_LIMIT   || '100'),  10) || 100;
+    const rateMs     = parseInt(await ask(rl, '  Delay between requests (ms)', process.env.RATE_MS || '600'), 10) || 600;
+    const concurrency= parseInt(await ask(rl, '  Concurrent message channels', process.env.CONCURRENCY || '3'), 10) || 3;
+
+    rl.close();
+
+    if (!token || !sourceId || !targetId) {
+        console.error(paint(c.red, '\n[ERR] Token, source ID and target ID are required.\n'));
+        process.exit(1);
     }
+
+    console.log();
+    log.info(`Skip list: ${skipIds.size > 0 ? [...skipIds].join(', ') : paint(c.dim, '(none)')}`);
+    log.info(`Delay: ${rateMs}ms  |  Msg limit: ${msgLimit}  |  Concurrency: ${concurrency}`);
+
+    return { token, sourceId, targetId, skipIds, doRoles, doChannels, doMessages, msgLimit, rateMs, concurrency };
 }
 
-// Bot ready event
-client.on('ready', async () => {
-    log(`Logged in as ${client.user.tag}`);
-    log(`Bot is ready in ${client.guilds.cache.size} servers`);
-    
-    // Start cloning process
-    await cloneServer();
-    
-    // Exit after completion
-    process.exit(0);
-});
+// ─── Main ─────────────────────────────────────────────────────────────────────
+async function main() {
+    const cfg = await promptConfig();
 
-// Error handling
-client.on('error', (error) => {
-    log(`Client error: ${error.message}`);
-    console.error(error);
-});
+    const client = new Client();
 
-// Login
-log('Logging in...');
-client.login(USER_TOKEN).catch(error => {
-    log(`Login failed: ${error.message}`);
-    console.error(error);
-    process.exit(1);
-});
+    client.on('error', (err) => log.error(`Client: ${err.message}`));
+
+    client.once('ready', async () => {
+        log.success(`Logged in as ${paint(c.bold, client.user.tag)}`);
+        log.info(`Visible in ${client.guilds.cache.size} servers`);
+
+        const sourceGuild = client.guilds.cache.get(cfg.sourceId);
+        const targetGuild = client.guilds.cache.get(cfg.targetId);
+
+        if (!sourceGuild) { log.error(`Source server not found: ${cfg.sourceId}`); process.exit(1); }
+        if (!targetGuild) { log.error(`Target server not found: ${cfg.targetId}`); process.exit(1); }
+
+        log.info(`Source: ${paint(c.bold, sourceGuild.name)}`);
+        log.info(`Target: ${paint(c.bold, targetGuild.name)}`);
+
+        const startTime = Date.now();
+
+        try {
+            if (cfg.doRoles)    await cloneRoles(sourceGuild, targetGuild, cfg.rateMs);
+            if (cfg.doChannels) await cloneChannels(sourceGuild, targetGuild, cfg.skipIds, cfg.rateMs);
+            if (cfg.doMessages) await cloneAllMessages(sourceGuild, targetGuild, cfg.skipIds, cfg.msgLimit, cfg.concurrency, cfg.rateMs);
+        } catch (err) {
+            log.error(`Fatal: ${err.message}`);
+            console.error(err);
+        }
+
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+
+        console.log('\n' + paint(c.bold + c.green,
+            '╔══════════════════════════ SUMMARY ═══════════════════════════╗'
+        ));
+        console.log(paint(c.green, `  ✅ Roles        : ${stats.roles}`));
+        console.log(paint(c.green, `  ✅ Categories   : ${stats.categories}`));
+        console.log(paint(c.green, `  ✅ Text channels: ${stats.textChannels}`));
+        console.log(paint(c.green, `  ✅ Voice channels: ${stats.voiceChannels}`));
+        console.log(paint(c.green, `  ✅ Messages     : ${stats.messages}`));
+        console.log(paint(stats.errors > 0 ? c.yellow : c.green,
+            `  ${stats.errors > 0 ? '⚠️' : '✅'} Errors       : ${stats.errors}`));
+        console.log(paint(c.cyan,  `  ⏱  Elapsed     : ${elapsed}s`));
+        console.log(paint(c.bold + c.green,
+            '╚══════════════════════════════════════════════════════════════╝\n'
+        ));
+
+        process.exit(0);
+    });
+
+    log.info('Connecting to Discord…');
+    client.login(cfg.token).catch(err => {
+        log.error(`Login failed: ${err.message}`);
+        process.exit(1);
+    });
+}
+
+main();
