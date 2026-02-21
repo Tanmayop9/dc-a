@@ -1,25 +1,30 @@
-# Discord Server Cloning Tool
+# Discord Server Cloner ⚡ Ultra Edition
 
-A powerful tool that clones everything from a Discord server including roles, channels, categories, messages, embeds, and attachments. Uses webhooks to send messages and discord.js-selfbot-v13 for authentication.
+An advanced, interactive console tool that clones everything from a Discord server — roles, channels, categories, messages, embeds, and attachments — with a **Skip Channels** feature, parallel message processing, and a live progress display.
 
 ## Features
 
+- ✅ **Interactive CLI** — prompts for every option at startup; no `.env` required
+- ✅ **Wipe target server** — optionally delete all existing channels and/or roles before cloning
+- ✅ **Skip Channels** — specify channel IDs to exclude from cloning (categories, text, voice)
+- ✅ **Selective cloning** — choose to clone roles, channels, messages independently
+- ✅ **Parallel message cloning** — configurable concurrency for faster throughput
+- ✅ **Live progress bars** — visual feedback per channel during message cloning
+- ✅ **Summary report** — final count of every cloned resource plus elapsed time
 - ✅ Clone server roles with permissions, colors, and settings
 - ✅ Clone categories and their structure
 - ✅ Clone text channels with topics and settings
 - ✅ Clone voice channels with bitrate and user limits
-- ✅ Clone messages with proper author attribution
-- ✅ Clone embeds from messages
-- ✅ Clone images and attachments
-- ✅ Use webhooks for message sending (maintains original usernames and avatars)
-- ✅ Rate limit protection to avoid API restrictions
+- ✅ Clone messages with proper author attribution (via webhooks)
+- ✅ Clone embeds and images/attachments
+- ✅ Tunable rate-limit delay to avoid API restrictions
 
 ## Prerequisites
 
 - Node.js v20.18.0 or higher
 - A Discord user account (not a bot account)
 - Access to both source and target servers
-- Proper permissions in the target server (Administrator recommended)
+- Administrator permissions in the target server (recommended)
 
 ## Installation
 
@@ -34,100 +39,101 @@ cd dc-a
 npm install
 ```
 
-3. Create a `.env` file based on `.env.example`:
-```bash
-cp .env.example .env
-```
-
-4. Edit the `.env` file and add your configuration:
-```env
-USER_TOKEN=your_user_token_here
-SOURCE_SERVER_ID=source_server_id_here
-TARGET_SERVER_ID=target_server_id_here
-```
-
-## Configuration
-
-### Getting Your User Token
-
-**⚠️ WARNING:** Using user tokens violates Discord's Terms of Service. Use this tool at your own risk. Your account may be banned.
-
-1. Open Discord in your browser
-2. Press F12 to open Developer Tools
-3. Go to the "Network" tab
-4. Type `/api` in the filter box
-5. Refresh the page (F5)
-6. Look for any request and check the "Authorization" header
-7. Copy the token value
-
-### Getting Server IDs
-
-1. Enable Developer Mode in Discord (User Settings → Advanced → Developer Mode)
-2. Right-click on a server icon
-3. Click "Copy ID"
+> **No `.env` file needed** — every option is entered interactively when you run the tool.
 
 ## Usage
 
-Run the cloning tool:
 ```bash
 npm start
 ```
 
-The tool will:
-1. Log in with your user token
-2. Clone all roles from the source server
-3. Clone all categories and channels
-4. Clone messages from all text channels (up to 100 messages per channel by default)
-5. Exit when complete
+The tool launches an **interactive console wizard** that asks:
+
+| Prompt | Description |
+|---|---|
+| User token | Your Discord user token |
+| Source server ID | The server to clone **from** |
+| Target server ID | The server to clone **into** |
+| **Skip channel IDs** | Comma-separated IDs of channels to **skip** |
+| **Delete ALL channels from target?** | Wipes every channel from the target server first (y/N) |
+| **Delete ALL roles from target?** | Wipes every non-managed role from the target server first (y/N) |
+| Clone roles? | Y/n |
+| Clone channels? | Y/n |
+| Clone messages? | Y/n |
+| Messages per channel | How many messages to clone (default 100) |
+| Delay between requests (ms) | Rate-limit buffer (default 600 ms) |
+| Concurrent message channels | Parallel channels during message cloning (default 3) |
+
+All prompts show the current `.env` / environment value as a default — just press **Enter** to accept it.
+
+### Skip Channels example
+
+When prompted for *"Skip channel IDs"*, paste a comma-separated list:
+
+```
+123456789012345678, 987654321098765432
+```
+
+Those channels will be silently skipped during cloning.
+
+### Wipe target server
+
+When prompted *"Delete ALL channels / roles from target server first?"*, answering **y** will:
+- Delete every channel (text, voice, category) in the target server
+- Delete every non-managed role in the target server
+
+This gives you a clean slate before cloning.
 
 ## How It Works
 
-1. **Role Cloning**: Creates roles in the target server with the same names, colors, permissions, and settings
-2. **Channel Cloning**: Creates categories first, then text and voice channels maintaining the hierarchy
-3. **Message Cloning**: Uses webhooks to send messages, preserving the original author's username and avatar
-4. **Embed & Attachment Handling**: Copies embeds and downloads/re-uploads attachments through webhooks
+1. **Target wipe (optional)** — deletes all existing channels and/or roles from the target server to give a clean slate
+2. **Role Cloning** — creates roles in the target server with matching names, colours, permissions, and settings
+3. **Channel Cloning** — creates categories first, then text and voice channels preserving the hierarchy; skipped IDs are ignored
+4. **Message Cloning** — uses webhooks to send messages, preserving the original author's username and avatar; channels run in parallel up to the configured concurrency
+5. **Embed & Attachment handling** — copies embeds and re-uploads attachments via webhooks
+
+## Configuration Reference
+
+All options are entered interactively at startup — no `.env` file needed.
+
+| Option | Default | Description |
+|---|---|---|
+| User token | *(required)* | Discord user token |
+| Source server ID | *(required)* | ID of the server to clone from |
+| Target server ID | *(required)* | ID of the server to clone into |
+| Skip channel IDs | *(empty)* | Comma-separated channel IDs to skip |
+| Delete ALL channels? | `N` | Wipe all channels from target before cloning |
+| Delete ALL roles? | `N` | Wipe all non-managed roles from target before cloning |
+| Messages per channel | `100` | Max messages to clone per channel |
+| Delay between requests (ms) | `600` | Milliseconds between API calls |
+| Concurrent channels | `3` | Parallel channels for message cloning |
 
 ## Limitations
 
-- Message history is limited to 100 messages per channel by default (can be modified in code)
-- Rate limits apply - the tool includes delays to avoid hitting them
-- Some Discord features may not be fully cloned (e.g., server boosts, custom emojis)
-- User tokens are against Discord ToS - use at your own risk
-
-## Customization
-
-You can modify the message limit in `index.js`:
-
-```javascript
-// In the cloneAllMessages function, change the limit parameter
-await cloneMessages(sourceChannel, targetChannel, 500); // Clone 500 messages instead of 100
-```
+- Message history is capped at the Discord API limit of 100 per fetch (increase `MSG_LIMIT` for deeper history, but it still fetches at most 100 at a time)
+- Rate limits apply — increase `RATE_MS` for very large servers if you hit 429 errors
+- Some Discord features are not cloned: server boosts, custom emojis, stickers, threads
+- User tokens violate Discord's Terms of Service — use at your own risk
 
 ## Security Notice
 
 ⚠️ **IMPORTANT SECURITY WARNINGS:**
 
-1. **Never share your user token** - It provides full access to your Discord account
-2. **Using selfbots violates Discord's Terms of Service** - Your account may be banned
+1. **Never share your user token** — it provides full access to your Discord account
+2. **Using selfbots violates Discord's Terms of Service** — your account may be banned
 3. **This tool is for educational purposes only**
-4. **Always keep your `.env` file private** - Add it to `.gitignore`
+4. **Keep your `.env` file private** — it is already listed in `.gitignore`
 
 ## Troubleshooting
 
-### Error: "Missing required configuration"
-- Make sure your `.env` file exists and contains all required values
+### "Token, source ID and target ID are required"
+- Either enter them at the prompt or set them in your `.env` file
 
-### Error: "Source server not found"
-- Verify the SOURCE_SERVER_ID is correct
-- Ensure you're a member of the source server
+### "Source / Target server not found"
+- Verify the server ID is correct and that you are a member of that server
 
-### Error: "Target server not found"
-- Verify the TARGET_SERVER_ID is correct
-- Ensure you're a member of the target server
-
-### Rate limit errors
-- The tool includes delays, but you may need to increase them for very large servers
-- Modify the `delay(1000)` calls to use larger values (e.g., `delay(2000)`)
+### Rate limit / 429 errors
+- Increase the delay: enter a higher value (e.g. `1500`) when prompted for *"Delay between requests"*
 
 ## License
 
