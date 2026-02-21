@@ -4,7 +4,8 @@ An advanced, interactive console tool that clones everything from a Discord serv
 
 ## Features
 
-- ✅ **Interactive CLI** — prompts for all options at startup; `.env` values used as defaults
+- ✅ **Interactive CLI** — prompts for every option at startup; no `.env` required
+- ✅ **Wipe target server** — optionally delete all existing channels and/or roles before cloning
 - ✅ **Skip Channels** — specify channel IDs to exclude from cloning (categories, text, voice)
 - ✅ **Selective cloning** — choose to clone roles, channels, messages independently
 - ✅ **Parallel message cloning** — configurable concurrency for faster throughput
@@ -38,11 +39,7 @@ cd dc-a
 npm install
 ```
 
-3. (Optional) Create a `.env` file from the example to pre-fill defaults:
-```bash
-cp .env.example .env
-# edit .env and fill in your values
-```
+> **No `.env` file needed** — every option is entered interactively when you run the tool.
 
 ## Usage
 
@@ -58,6 +55,8 @@ The tool launches an **interactive console wizard** that asks:
 | Source server ID | The server to clone **from** |
 | Target server ID | The server to clone **into** |
 | **Skip channel IDs** | Comma-separated IDs of channels to **skip** |
+| **Delete ALL channels from target?** | Wipes every channel from the target server first (y/N) |
+| **Delete ALL roles from target?** | Wipes every non-managed role from the target server first (y/N) |
 | Clone roles? | Y/n |
 | Clone channels? | Y/n |
 | Clone messages? | Y/n |
@@ -75,40 +74,39 @@ When prompted for *"Skip channel IDs"*, paste a comma-separated list:
 123456789012345678, 987654321098765432
 ```
 
-Those channels (and any category/text/voice channel whose ID matches) will be silently skipped during cloning.
+Those channels will be silently skipped during cloning.
 
-### Pre-filling via `.env`
+### Wipe target server
 
-You can also set defaults in your `.env` file so you don't have to type them every run:
+When prompted *"Delete ALL channels / roles from target server first?"*, answering **y** will:
+- Delete every channel (text, voice, category) in the target server
+- Delete every non-managed role in the target server
 
-```env
-USER_TOKEN=your_token
-SOURCE_SERVER_ID=111111111111111111
-TARGET_SERVER_ID=222222222222222222
-SKIP_CHANNEL_IDS=333333333333333333,444444444444444444
-MSG_LIMIT=200
-RATE_MS=600
-CONCURRENCY=5
-```
+This gives you a clean slate before cloning.
 
 ## How It Works
 
-1. **Role Cloning** — creates roles in the target server with matching names, colours, permissions, and settings
-2. **Channel Cloning** — creates categories first, then text and voice channels preserving the hierarchy; skipped IDs are ignored
-3. **Message Cloning** — uses webhooks to send messages, preserving the original author's username and avatar; channels run in parallel up to the configured concurrency
-4. **Embed & Attachment handling** — copies embeds and re-uploads attachments via webhooks
+1. **Target wipe (optional)** — deletes all existing channels and/or roles from the target server to give a clean slate
+2. **Role Cloning** — creates roles in the target server with matching names, colours, permissions, and settings
+3. **Channel Cloning** — creates categories first, then text and voice channels preserving the hierarchy; skipped IDs are ignored
+4. **Message Cloning** — uses webhooks to send messages, preserving the original author's username and avatar; channels run in parallel up to the configured concurrency
+5. **Embed & Attachment handling** — copies embeds and re-uploads attachments via webhooks
 
 ## Configuration Reference
 
-| Variable | Default | Description |
+All options are entered interactively at startup — no `.env` file needed.
+
+| Option | Default | Description |
 |---|---|---|
-| `USER_TOKEN` | *(required)* | Discord user token |
-| `SOURCE_SERVER_ID` | *(required)* | ID of the server to clone from |
-| `TARGET_SERVER_ID` | *(required)* | ID of the server to clone into |
-| `SKIP_CHANNEL_IDS` | *(empty)* | Comma-separated channel IDs to skip |
-| `MSG_LIMIT` | `100` | Max messages to clone per channel |
-| `RATE_MS` | `600` | Milliseconds between API calls |
-| `CONCURRENCY` | `3` | Parallel channels for message cloning |
+| User token | *(required)* | Discord user token |
+| Source server ID | *(required)* | ID of the server to clone from |
+| Target server ID | *(required)* | ID of the server to clone into |
+| Skip channel IDs | *(empty)* | Comma-separated channel IDs to skip |
+| Delete ALL channels? | `N` | Wipe all channels from target before cloning |
+| Delete ALL roles? | `N` | Wipe all non-managed roles from target before cloning |
+| Messages per channel | `100` | Max messages to clone per channel |
+| Delay between requests (ms) | `600` | Milliseconds between API calls |
+| Concurrent channels | `3` | Parallel channels for message cloning |
 
 ## Limitations
 

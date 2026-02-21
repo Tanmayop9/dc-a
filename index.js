@@ -1,4 +1,3 @@
-require('dotenv').config();
 const { Client } = require('discord.js-selfbot-v13');
 const readline = require('readline');
 
@@ -197,9 +196,9 @@ async function cloneChannels(sourceGuild, targetGuild, skipIds, rateMs) {
     log.info(`Channels done — ${stats.categories} categories, ${stats.textChannels} text, ${stats.voiceChannels} voice`);
 }
 
-async function cloneMessages(sourceChannel, targetChannel, limit, rateMs) {
+async function cloneMessages(sourceChannel, targetChannel, limit, rateMs, webhookName) {
     try {
-        const webhook = await targetChannel.createWebhook('CloneBot', { reason: 'Message cloning' });
+        const webhook = await targetChannel.createWebhook(webhookName, { reason: 'Message cloning' });
         let messages = await sourceChannel.messages.fetch({ limit });
         messages = [...messages.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp);
 
@@ -207,8 +206,7 @@ async function cloneMessages(sourceChannel, targetChannel, limit, rateMs) {
         for (const msg of messages) {
             try {
                 const opts = {
-                    username:  msg.author.username,
-                    avatarURL: msg.author.displayAvatarURL(),
+                    username: msg.author.username,
                 };
                 if (msg.content)            opts.content = msg.content;
                 if (msg.embeds.length > 0)  opts.embeds  = msg.embeds.map(e => e.toJSON());
@@ -233,7 +231,7 @@ async function cloneMessages(sourceChannel, targetChannel, limit, rateMs) {
     }
 }
 
-async function cloneAllMessages(sourceGuild, targetGuild, skipIds, limit, concurrency, rateMs) {
+async function cloneAllMessages(sourceGuild, targetGuild, skipIds, limit, concurrency, rateMs, webhookName) {
     log.step('Cloning Messages');
     const pairs = [];
     for (const [srcId, tgtId] of clonedChannels) {
@@ -244,9 +242,53 @@ async function cloneAllMessages(sourceGuild, targetGuild, skipIds, limit, concur
         }
     }
     log.info(`Cloning messages from ${pairs.length} channels (concurrency: ${concurrency}, limit: ${limit})`);
-    const tasks = pairs.map(({ src, tgt }) => () => cloneMessages(src, tgt, limit, rateMs));
+    const tasks = pairs.map(({ src, tgt }) => () => cloneMessages(src, tgt, limit, rateMs, webhookName));
     await pLimit(tasks, concurrency);
     log.info(`Messages done — ${stats.messages} sent`);
+}
+
+// ─── Wipe target server ───────────────────────────────────────────────────────
+
+async function deleteTargetChannels(targetGuild, rateMs) {
+    log.step('Wiping Channels from Target Server');
+    const channels = [...targetGuild.channels.cache.values()];
+    let done = 0;
+    process.stdout.write(`  ${progressBar(done, channels.length)}\r`);
+    for (const ch of channels) {
+        try {
+            await ch.delete('Wiped before clone');
+            log.warn(`Deleted channel: ${ch.name}`);
+            await delay(rateMs);
+        } catch (err) {
+            log.error(`Delete channel "${ch.name}": ${err.message}`);
+        }
+        done++;
+        process.stdout.write(`  ${progressBar(done, channels.length)}\r`);
+    }
+    console.log();
+    log.info(`Channel wipe done — ${done} processed`);
+}
+
+async function deleteTargetRoles(targetGuild, rateMs) {
+    log.step('Wiping Roles from Target Server');
+    const roles = [...targetGuild.roles.cache.values()]
+        .filter(r => r.name !== '@everyone' && !r.managed)
+        .sort((a, b) => b.position - a.position); // highest first
+    let done = 0;
+    process.stdout.write(`  ${progressBar(done, roles.length)}\r`);
+    for (const role of roles) {
+        try {
+            await role.delete('Wiped before clone');
+            log.warn(`Deleted role: ${role.name}`);
+            await delay(rateMs);
+        } catch (err) {
+            log.error(`Delete role "${role.name}": ${err.message}`);
+        }
+        done++;
+        process.stdout.write(`  ${progressBar(done, roles.length)}\r`);
+    }
+    console.log();
+    log.info(`Role wipe done — ${done} processed`);
 }
 
 // ─── Interactive configuration ────────────────────────────────────────────────
@@ -259,28 +301,33 @@ async function promptConfig() {
         '║    Discord Server Cloner  ⚡  Ultra Edition  ║\n' +
         '╚══════════════════════════════════════════════╝'
     ));
-    console.log(paint(c.dim, '  Press Enter to accept [defaults from .env]\n'));
+    console.log();
 
-    const token      = await ask(rl, 'User token',         process.env.USER_TOKEN        || '');
-    const sourceId   = await ask(rl, 'Source server ID',   process.env.SOURCE_SERVER_ID  || '');
-    const targetId   = await ask(rl, 'Target server ID',   process.env.TARGET_SERVER_ID  || '');
+    const token    = await ask(rl, 'User token');
+    const sourceId = await ask(rl, 'Source server ID');
+    const targetId = await ask(rl, 'Target server ID');
 
     // Skip channel IDs
-    const skipRaw    = await ask(rl, 'Skip channel IDs (comma-separated, or leave blank)',
-                                     process.env.SKIP_CHANNEL_IDS || '');
-    const skipIds    = new Set(skipRaw.split(',').map(s => s.trim()).filter(Boolean));
+    const skipRaw = await ask(rl, 'Skip channel IDs (comma-separated, or leave blank)');
+    const skipIds = new Set(skipRaw.split(',').map(s => s.trim()).filter(Boolean));
+
+    // Wipe target first?
+    console.log(paint(c.bold + c.red, '\n  ⚠  Target server wipe'));
+    const doWipeChannels = await askYN(rl, '  Delete ALL channels from target server first?', false);
+    const doWipeRoles    = await askYN(rl, '  Delete ALL roles from target server first?',    false);
 
     // What to clone
     console.log(paint(c.bold, '\n  What to clone?'));
-    const doRoles    = await askYN(rl, '  Clone roles?',         true);
-    const doChannels = await askYN(rl, '  Clone channels?',      true);
-    const doMessages = await askYN(rl, '  Clone messages?',      true);
+    const doRoles    = await askYN(rl, '  Clone roles?',    true);
+    const doChannels = await askYN(rl, '  Clone channels?', true);
+    const doMessages = await askYN(rl, '  Clone messages?', true);
 
     // Performance options
     console.log(paint(c.bold, '\n  Performance options'));
-    const msgLimit   = parseInt(await ask(rl, '  Messages per channel', process.env.MSG_LIMIT   || '100'),  10) || 100;
-    const rateMs     = parseInt(await ask(rl, '  Delay between requests (ms)', process.env.RATE_MS || '600'), 10) || 600;
-    const concurrency= parseInt(await ask(rl, '  Concurrent message channels', process.env.CONCURRENCY || '3'), 10) || 3;
+    const webhookName = await ask(rl, '  Webhook name for message cloning', 'CloneBot');
+    const msgLimit    = parseInt(await ask(rl, '  Messages per channel (default 100)'),             10) || 100;
+    const rateMs      = parseInt(await ask(rl, '  Delay between requests ms (default 600)'),        10) || 600;
+    const concurrency = parseInt(await ask(rl, '  Concurrent message channels (default 3)'),        10) || 3;
 
     rl.close();
 
@@ -293,7 +340,8 @@ async function promptConfig() {
     log.info(`Skip list: ${skipIds.size > 0 ? [...skipIds].join(', ') : paint(c.dim, '(none)')}`);
     log.info(`Delay: ${rateMs}ms  |  Msg limit: ${msgLimit}  |  Concurrency: ${concurrency}`);
 
-    return { token, sourceId, targetId, skipIds, doRoles, doChannels, doMessages, msgLimit, rateMs, concurrency };
+    return { token, sourceId, targetId, skipIds, doWipeChannels, doWipeRoles,
+             doRoles, doChannels, doMessages, webhookName, msgLimit, rateMs, concurrency };
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
@@ -320,9 +368,11 @@ async function main() {
         const startTime = Date.now();
 
         try {
-            if (cfg.doRoles)    await cloneRoles(sourceGuild, targetGuild, cfg.rateMs);
-            if (cfg.doChannels) await cloneChannels(sourceGuild, targetGuild, cfg.skipIds, cfg.rateMs);
-            if (cfg.doMessages) await cloneAllMessages(sourceGuild, targetGuild, cfg.skipIds, cfg.msgLimit, cfg.concurrency, cfg.rateMs);
+            if (cfg.doWipeChannels) await deleteTargetChannels(targetGuild, cfg.rateMs);
+            if (cfg.doWipeRoles)    await deleteTargetRoles(targetGuild, cfg.rateMs);
+            if (cfg.doRoles)        await cloneRoles(sourceGuild, targetGuild, cfg.rateMs);
+            if (cfg.doChannels)     await cloneChannels(sourceGuild, targetGuild, cfg.skipIds, cfg.rateMs);
+            if (cfg.doMessages)     await cloneAllMessages(sourceGuild, targetGuild, cfg.skipIds, cfg.msgLimit, cfg.concurrency, cfg.rateMs, cfg.webhookName);
         } catch (err) {
             log.error(`Fatal: ${err.message}`);
             console.error(err);
